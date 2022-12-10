@@ -7,7 +7,7 @@ import sys
 import time
 
 IP = "127.0.0.1"
-GATE_IP = "GATE"
+MY_IP = "GATE"
 HOST_IP = "HOST"
 
 arp_table = {}
@@ -17,108 +17,107 @@ gateport = 9999
 
 def gate(lock):
 
-	lock.aquire()
-	if(HOST_IP not in arp_table):
-		lock.release()
-	
-		request = "" + broadcast + str(gateport) + "0806" + "0001" + "0800" + "0604" + "0001" + str(gateport) + GATE_IP + "0000" + HOST_IP + "0"*16
-		
-		sock =  socket(AF_INET,SOCK_DGRAM)
-		sock.sendto(request, (IP,int(broadcast)))
-		s.close()
-	else:
-		lock.release()
-
-
-	print("waitng on reponse")
 	while(1):
-		lock.aquire()
-		if(GATE_IP not in arp_table):
+		lock.acquire()
+		if(HOST_IP not in arp_table):
 			lock.release()
-			time.sleep(1)
+	
+			print("request Host arp")
+			request = "" + str(broadcast) + str(gateport) + "86" + "0001" + "0800" + "0604" + "0001" + str(gateport) + MY_IP + "0000" + HOST_IP + "0"*16
+		
+			sock =  socket(AF_INET,SOCK_DGRAM)
+			sock.sendto(request.encode(), (IP,int(broadcast)))
+			sock.close()
+			time.sleep(2)
 		else:
 			lock.release()
+			print("HOST port found")
 			break
 	
+	hostsock =  socket(AF_INET,SOCK_DGRAM)
+	hostsock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
 	while(1):
-		hostsock =  socket(AF_INET,SOCK_DGRAM)
-
-		lock.aquire()
-		port = arp_table[HOST_IP]
+		
+		lock.acquire()
+		hport = arp_table[HOST_IP] -1
 		lock.release()
 		
-		hostsock.bind((IP,port))
-		data = hostsock.recv(1024)
-		print(data.decode())
+		print("HPORT {}",hport)
+		hostsock.bind((IP,gateport-1))
+		data = hostsock.recvfrom(1024)
+		
 		response = "<html><h1>Good Response</h1></html>\r\n\r\n"
 		
-		sock =  socket(AF_INET,SOCK_DGRAM)
-		sock.sendto(response, (IP,port))
-		sock.close()	
-
-		time.sleep(5)
-		hostsock.close()		
+		hostsock.sendto(response.encode(), (IP,hport))
+		
+		time.sleep(1)
+				
 
 
 
-def ARP_receive(lock):
+def ARP_receive(lock,data):
 	
-	print("Current ARP Thread {}"_thread.get_native_id())
+# 	udpsock = socket(AF_INET,SOCK_DGRAM)
+# 	udpsock.bind((IP,gateport))
+# 	
+# 	while(1):
+# 		data, addr = updsock.recvfrom(1024)
+	data = data.decode()
+
+	print(data)
+	
+	e_dport = data[:4]
+	e_sport = data[4:8]
+	e_type = data[8:10]
+	if(e_type != "86"): 
+		print("no arp")
+		return
+	
+	enet = data[10:14]
+	opp = data[14:22]
+	arp_type = data[22:26]
+	sport = data[26:30]
+	sip = data[30:34]
+	dport = data[34:38]
+	dip = data[38:42]
+	
+	
+	if(arp_type == "0001"):
+	
+		print("request")
+	
+		if(dip != MY_IP): 
+			print("not for me")
+		
+		response = "" + e_sport + e_dport + e_type + enet + opp + "0002" + str(gateport) + MY_IP + sport + sip + "000000000000"
+		
+		sock =  socket(AF_INET,SOCK_DGRAM)
+		sock.sendto(response.encode(), (IP,int(sport)))
+		sock.close()			
+		
+	elif(arp_type == "0002"):
+		print("response received: Port {}")
+		lock.acquire()
+		arp_table[sip] = int(sport)
+		lock.release()
+		
+		
+	else:
+		print("Unknown ARP type")
+
+
+
+
+
+if __name__ == "__main__":
+	lock = _thread.allocate_lock()
+	
 	udpsock = socket(AF_INET,SOCK_DGRAM)
 	udpsock.bind((IP,gateport))
 	
+	_thread.start_new_thread(gate,(lock,))
 	while(1):
-		data, addr = updsock.recvfrom(1024)
-		print(data)
-		
-		e_dport = data[:4]
-		e_sport = data[4:8]
-		e_type = data[8:10]
-		if(e_type != "0806"): 
-			continue
-		
-		opp = data[10:16]
-		arp_type = data[16:18]
-		sport = data[18:22]
-		sip = data[22:26]
-		dport = data[26:30]
-		dip = data[30:34]
-		
-		
-		if(arp_type == "0001"):
-		
-			print("request")
-		
-			if(sip != GATE_IP): 
-				continue
-			
-			response = "" + e_sport + e_dport + e_type + opp + "0002" + gateport + GATE_IP + sport + sip + "000000000000"
-			
-			print("request response: \n{}",response)
-			
-			sock =  socket(AF_INET,SOCK_DGRAM)
-			sock.sendto(response, (IP,int(sport)))
-			sock.close()			
-			
-		elif(arp_type == "0002"):
-			print("response received: Port {} is at {}",sport,smac)
-			lock.aquire()
-			arp_table[sip] = int(sport)
-			lock.release()
-			
-			
-		else:
-			print("Unknown ARP type")
-			continue
-	
-
-
-
-
-if __name__ == "__main___":
-	lock = _thread.allocate_lock()
-	a = lock.aquire()
-	
-	_thread.start_new_thread(ARP_receive,lock)
-	_thread.start_new_thread(gate,lock)
+		print("THread 2 waiting on data")
+		data, addr = udpsock.recvfrom(1024)
+		_thread.start_new_thread(ARP_receive,(lock,data))
 	
